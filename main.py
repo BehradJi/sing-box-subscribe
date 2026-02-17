@@ -42,6 +42,7 @@ def load_json(path):
 
 def process_subscribes(subscribes):
     nodes = {}
+    ech_enabled = providers.get('ech') == '1' or providers.get('ech') == 1
     for subscribe in subscribes:
         if 'enabled' in subscribe and not subscribe['enabled']:
             continue
@@ -49,6 +50,14 @@ def process_subscribes(subscribes):
             continue
         _nodes = get_nodes(subscribe['url'])
         if _nodes and len(_nodes) > 0:
+            if ech_enabled:
+                for node in _nodes:
+                    if node.get('type') == 'vless' and 'tls' in node:
+                        # Ensure tls is enabled before adding ECH
+                        if node['tls'].get('enabled', False):
+                            node['tls']['ech'] = {
+                                "enabled": True
+                            }
             add_prefix(_nodes, subscribe)
             add_emoji(_nodes, subscribe)
             nodefilter(_nodes, subscribe)
@@ -578,16 +587,33 @@ def parse_json(value):
 if __name__ == '__main__':
     init_parsers()
     parser = argparse.ArgumentParser()
-    parser.add_argument('--temp_json_data', type=parse_json, help='临时内容')
+    # Accept as a string to handle Vercel's argument passing safely
+    parser.add_argument('--temp_json_data', type=str, help='临时内容')
     parser.add_argument('--template_index', type=int, help='模板序号')
     parser.add_argument('--gh_proxy_index', type=str, help='github加速链接')
     args = parser.parse_args()
+    
     temp_json_data = args.temp_json_data
-    gh_proxy_index = args.gh_proxy_index
-    if temp_json_data and temp_json_data != '{}':
-        providers = json.loads(temp_json_data)
-    else:
-        providers = load_json('providers.json')  # 加载本地 providers.json
+    
+    # --- VERCEL COMPATIBILITY FIX ---
+    providers = None
+    if temp_json_data:
+        try:
+            # First, try to parse it as JSON (Vercel/CLI string)
+            providers = json.loads(temp_json_data)
+            # If it's still a string after one load (double encoding), load it again
+            if isinstance(providers, str):
+                providers = json.loads(providers)
+        except (json.JSONDecodeError, TypeError):
+            # If parsing fails, it might already be a dict object
+            providers = temp_json_data
+    
+    # Fallback to local file if empty or invalid
+    if not isinstance(providers, dict):
+        providers = load_json('providers.json')
+    # --------------------------------
+
+    # Now .get() is guaranteed to work
     if providers.get('config_template'):
         config_template_path = providers['config_template']
         print('选择: \033[33m' + config_template_path + '\033[0m')
