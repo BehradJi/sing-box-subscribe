@@ -42,6 +42,7 @@ def load_json(path):
 
 def process_subscribes(subscribes):
     nodes = {}
+    ech_enabled = providers.get('ech') == '1' or providers.get('ech') == 1
     for subscribe in subscribes:
         if 'enabled' in subscribe and not subscribe['enabled']:
             continue
@@ -49,6 +50,14 @@ def process_subscribes(subscribes):
             continue
         _nodes = get_nodes(subscribe['url'])
         if _nodes and len(_nodes) > 0:
+            if ech_enabled:
+                for node in _nodes:
+                    if node.get('type') == 'vless' and 'tls' in node:
+                        # Ensure tls is enabled before adding ECH
+                        if node['tls'].get('enabled', False):
+                            node['tls']['ech'] = {
+                                "enabled": True
+                            }
             add_prefix(_nodes, subscribe)
             add_emoji(_nodes, subscribe)
             nodefilter(_nodes, subscribe)
@@ -585,7 +594,7 @@ if __name__ == '__main__':
     temp_json_data = args.temp_json_data
     gh_proxy_index = args.gh_proxy_index
     if temp_json_data and temp_json_data != '{}':
-        providers = json.loads(temp_json_data)
+       providers = temp_json_data 
     else:
         providers = load_json('providers.json')  # 加载本地 providers.json
     if providers.get('config_template'):
