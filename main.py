@@ -85,47 +85,74 @@ def save_config(path, nodes):
 if __name__ == '__main__':
     init_parsers()
     parser = argparse.ArgumentParser()
-    parser.add_argument('--temp_json_data', type=str, help='Temporary JSON Data')
-    parser.add_argument('--template_index', type=int, help='Template Index')
-    args = parser.parse_args()
     
-    # 1. Robust JSON parsing to prevent 'str' has no attribute 'get'
+    # Use 'str' instead of 'parse_json' for the initial catch to prevent 
+    # Python 3.14 type-checking errors during the handshake.
+    parser.add_argument('--temp_json_data', type=str, help='临时内容')
+    parser.add_argument('--template_index', type=int, help='模板序号')
+    parser.add_argument('--gh_proxy_index', type=str, help='github加速链接')
+    
+    # Use parse_known_args() instead of parse_args()
+    # This prevents the "unrecognized arguments" crash if Flask sends extra data
+    args, unknown = parser.parse_known_args()
+    
+    temp_json_data = args.temp_json_data
+    
+    # Handle JSON parsing manually for better error control
     providers = None
-    if args.temp_json_data:
+    if temp_json_data and temp_json_data != '{}':
         try:
-            providers = json.loads(args.temp_json_data)
+            providers = json.loads(temp_json_data)
+            # Handle double-encoded strings from Vercel
             if isinstance(providers, str):
                 providers = json.loads(providers)
-        except:
-            providers = args.temp_json_data
-
-    if not isinstance(providers, dict):
+        except Exception as e:
+            print(f"JSON Parsing Error: {e}")
+            providers = load_json('providers.json')
+    else:
         providers = load_json('providers.json')
 
-    # 2. Load the appropriate config template
+    # Load Template Logic
     if providers.get('config_template'):
-        try:
-            response = requests.get(providers['config_template'], timeout=5)
-            config = response.json()
-        except:
-            config = load_json('config_template/default.json') # Fallback
+        config_template_path = providers['config_template']
+        print('选择: \033[33m' + config_template_path + '\033[0m')
+        response = requests.get(providers['config_template'], timeout=10)
+        response.raise_for_status()
+        config = response.json()
     else:
         template_list = get_template()
+        if len(template_list) < 1:
+            print('没有找到模板文件')
+            sys.exit()
         uip = select_config_template(template_list, selected_template_index=args.template_index)
-        config = load_json(f'config_template/{template_list[uip]}.json')
+        config_template_path = 'config_template/' + template_list[uip] + '.json'
+        print('选择: \033[33m' + template_list[uip] + '.json\033[0m')
+        config = load_json(config_template_path)
 
-    # 3. Process subscription and ECH injection
-    nodes = process_subscribes(providers.get("subscribes", []))
+    # Process Nodes
+    nodes = process_subscribes(providers["subscribes"])
 
-    # 4. Assemble final configuration
+    # GH Proxy Logic - Now safer
+    if args.gh_proxy_index and str(args.gh_proxy_index).isdigit():
+        gh_idx = int(args.gh_proxy_index)
+        if "route" in config and "rule_set" in config["route"]:
+            urls = [item["url"] for item in config["route"]["rule_set"]]
+            new_urls = set_gh_proxy(urls, gh_idx)
+            for item, new_url in zip(config["route"]["rule_set"], new_urls):
+                item["url"] = new_url
+
+    # Generate Final Output
     if providers.get('Only-nodes'):
         final_config = [node for contents in nodes.values() for node in contents]
     else:
         final_config = combin_to_config(config, nodes)
 
-    # 5. Output result (Print is required for the API to receive the data)
-    print(json.dumps(final_config))
-    
-    # Attempt to save only if NOT on Vercel
+    # Save logic (Environment aware)
     save_path = providers.get("save_config_path", "config.json")
-    save_config(save_path, final_config)
+    if os.environ.get('VERCEL'):
+        print("Vercel detected: Outputting JSON to stdout.")
+    else:
+        save_config(save_path, final_config)
+    
+    # Crucial for the API to receive the data
+    print(json.dumps(final_config))
